@@ -28,6 +28,7 @@ import psychopy.iohub as io
 from psychopy.hardware import keyboard
 
 from egi_pynetstation.NetStation import NetStation  # the package to connect and control the egi device
+from triggerBox import TriggerBox  # the package to connect and control the trigger box
 
 from g3pylib import connect_to_glasses
 
@@ -59,7 +60,48 @@ def calculate_length_without_punctuation_and_indexes(sentence):
 
     return length_without_punctuation, indexes
 
-async def rest_with_eyetracker(g3, routineTimer, win, thisTrialsPlay, texts, eci_client=None):
+
+def label_to_trigger_code(label):
+    """Convert text labels to numeric trigger codes for TriggerBox"""
+    label_map = {
+        'BEGN': 1,
+        'STOP': 2,
+        'EYEE': 3,
+        'EYES': 4,
+        'CALS': 5,
+        'CALE': 6,
+        'PRES': 7,
+        'PREE': 8,
+        'ROWS': 9,
+        'ROWE': 10,
+        # Chapter codes: CH01-CH40 -> 11-50
+    }
+    
+    # Handle chapter codes (CH01, CH02, etc.)
+    if label.startswith('CH'):
+        try:
+            chapter_num = int(label[2:])  # Extract number after 'CH'
+            return 10 + chapter_num  # Offset by 10
+        except ValueError:
+            return 255  # Default/error code
+    
+    return label_map.get(label, 255)  # Return 255 for unknown labels
+
+
+def send_trigger(triggerbox, label):
+    """Send trigger signal using TriggerBox or print for debugging"""
+    if triggerbox is not None:
+        try:
+            trigger_code = label_to_trigger_code(label)
+            triggerbox.output_event_data(trigger_code)
+            print(f"send trigger: {label} (code: {trigger_code})")
+        except Exception as e:
+            print(f"Failed to send trigger {label}: {e}")
+    else:
+        print(f"send trigger: {label}")
+
+
+async def rest_with_eyetracker(g3, routineTimer, win, thisTrialsPlay, texts, triggerbox=None):
     """Take a break during reading, with a mandatory break duration set to 20 seconds by default (you
        can change it by changing the force_rest_time parameter when running the program).
        After that, the participant can decide the length of their break and proceed to the next
@@ -93,13 +135,11 @@ async def rest_with_eyetracker(g3, routineTimer, win, thisTrialsPlay, texts, eci
     if args.add_eyetracker == True:
         await g3.recorder.stop()
         if args.add_mark == True:
-            eci_client.send_event(event_type='EYEE')
+            send_trigger(triggerbox, "EYEE")
 
     # stop recording eeg and disconnect the egi device
     if args.add_mark == True:
-        eci_client.send_event(event_type='STOP')
-        eci_client.end_rec()
-        eci_client.disconnect()
+        send_trigger(triggerbox, "STOP")
 
     # show stop information on the screen, and finish resting when time is up or subject press the button\
     textRest = visual.TextStim(win=win, name='textRest',
@@ -137,36 +177,27 @@ async def rest_with_eyetracker(g3, routineTimer, win, thisTrialsPlay, texts, eci
 
     # start the eyetracker and egi device again, mark the chapter in the first marker in eeg recording
     if args.add_mark == True:
-        IP_ns = args.host_IP  # IP Address of Net Station
-        IP_amp = args.egi_IP  # IP Address of Amplifier
-        port_ns = 55513  # Port configured for ECI in Net Station
-        try:
-            eci_client = NetStation(IP_ns, port_ns)
-            eci_client.connect(ntp_ip=IP_amp)
-            eci_client.begin_rec()  # begin to record
-            eci_client.send_event(event_type='BEGN')
-        except:
-            raise EgiNotFoundException
+        send_trigger(triggerbox, "BEGN")
 
     if args.add_eyetracker == True:
         await g3.recorder.start()
         print('eyetracker start to record!!!!!!!!!')
         if args.add_mark == True:
-            eci_client.send_event(event_type='EYES')
+            send_trigger(triggerbox, "EYES")
 
     # reset the time to the beginning of the rest
     routineTimer.reset()
 
     # calibrate again
     if args.add_mark == True:
-        await calibrate(win, routineTimer, g3, eci_client=eci_client)
+        await calibrate(win, routineTimer, g3, triggerbox=triggerbox)
     else:
-        await calibrate(win, routineTimer, g3, eci_client=None)
+        await calibrate(win, routineTimer, g3, triggerbox=None)
 
-    return eci_client
+    return triggerbox
 
 
-async def calibrate(win, routineTimer, g3, eci_client=None):
+async def calibrate(win, routineTimer, g3, triggerbox=None):
     """This method is used for eye-tracking calibration.
 
        This method will display five dots sequentially on the screen: one at each corner and one at
@@ -241,7 +272,7 @@ async def calibrate(win, routineTimer, g3, eci_client=None):
                     win.flip()
 
                 if args.add_mark == True:
-                    eci_client.send_event(event_type="CALS")
+                    send_trigger(triggerbox, "CALS")
 
                 error_per_calibration = 0
 
@@ -308,12 +339,12 @@ async def calibrate(win, routineTimer, g3, eci_client=None):
                         win.flip()
 
                 if args.add_mark == True:
-                    eci_client.send_event(event_type="CALE")
+                    send_trigger(triggerbox, "CALE")
 
             routineTimer.reset()
 
 
-def play_preface(thisExp, expInfo, win, routineTimer, eci_client=None):
+def play_preface(thisExp, expInfo, win, routineTimer, triggerbox=None):
     """
     This method is used for simulating the experiment and will take place after the calibration
     process. It will serve as a preliminary step before the actual novel reading begins.
@@ -362,7 +393,7 @@ def play_preface(thisExp, expInfo, win, routineTimer, eci_client=None):
         win.flip()
 
     if args.add_mark == True:
-        eci_client.send_event(event_type='PRES')
+        send_trigger(triggerbox, "PRES")
         count = 1
 
 
@@ -502,8 +533,8 @@ def play_preface(thisExp, expInfo, win, routineTimer, eci_client=None):
         # mark the eeg with 'ROWS' when a row begins to be highlighted
         if args.add_mark == True:
             if count == 1:
-                # eci_client.send_event(event_type='STRT')
-                eci_client.send_event(event_type='ROWS')
+                # send_trigger(triggerbox, "STRT")
+                send_trigger(triggerbox, "ROWS")
 
         # --- Run Routine "trial" ---
         routineTimer.reset()
@@ -522,7 +553,7 @@ def play_preface(thisExp, expInfo, win, routineTimer, eci_client=None):
             main_row_words_len_without_punc, _ = calculate_length_without_punctuation_and_indexes(
                 main_row_words)
             if count == main_row_words_len_without_punc:
-                eci_client.send_event(event_type='ROWE')
+                send_trigger(triggerbox, "ROWE")
                 count = 1
             else:
                 count += 1
@@ -533,7 +564,7 @@ def play_preface(thisExp, expInfo, win, routineTimer, eci_client=None):
 
     # completed 1.0 repeats of 'trialsPlay'
     if args.add_mark == True:
-        eci_client.send_event(event_type='PREE')
+        send_trigger(triggerbox, "PREE")
     routineTimer.reset()
 
 
@@ -588,20 +619,17 @@ def main_experiment_without_eyetracker(isFirstSession=True):
 
     """
     global args
-    # --- Connect to the egi device ---
+    # --- Connect to the trigger box ---
     if args.add_mark == True:
-        IP_ns = args.host_IP  # IP Address of Net Station
-        IP_amp = args.egi_IP  # IP Address of Amplifier
-        port_ns = 55513  # Port configured for ECI in Net Station
         try:
-            eci_client = NetStation(IP_ns, port_ns)
-            eci_client.connect(ntp_ip=IP_amp)
-            eci_client.begin_rec()  # begin to record
-            eci_client.send_event(event_type="BEGN")
+            triggerbox = TriggerBox(args.triggerbox_port)
+            send_trigger(triggerbox, "BEGN")
         except:
-            raise EgiNotFoundException
-
+            print("Failed to connect to TriggerBox")
+            triggerbox = None
         count = 1
+    else:
+        triggerbox = None
 
 
     # --- Prepare for the psychopy experiment ---
@@ -706,9 +734,9 @@ def main_experiment_without_eyetracker(isFirstSession=True):
 
     if isFirstSession == True:
         if args.add_mark == True:
-            play_preface(thisExp, expInfo, win, routineTimer, eci_client=eci_client)
+            play_preface(thisExp, expInfo, win, routineTimer, triggerbox=triggerbox)
         else:
-            play_preface(thisExp, expInfo, win, routineTimer, eci_client=None)
+            play_preface(thisExp, expInfo, win, routineTimer, triggerbox=None)
 
 
 
@@ -979,9 +1007,7 @@ def main_experiment_without_eyetracker(isFirstSession=True):
 
             # stop eyetracker and egi device
             if args.add_mark == True:
-                eci_client.send_event(event_type='STOP')
-                eci_client.end_rec()
-                eci_client.disconnect()
+                send_trigger(triggerbox, "STOP")
             # show stop information on the screen, and finish resting when time is up or subject press the button\
             textRest = visual.TextStim(win=win, name='textRest',
                                        text='您好！现在进入强制休息时间\n倒计时结束前不可以进入后续章节',
@@ -1018,15 +1044,7 @@ def main_experiment_without_eyetracker(isFirstSession=True):
 
             # start the eyetracker and egi device again, mark the chapter in the first marker in eeg recording
             if args.add_mark == True:
-                IP_ns = args.host_IP  # IP Address of Net Station
-                IP_amp = args.egi_IP  # IP Address of Amplifier
-                port_ns = 55513  # Port configured for ECI in Net Station
-                try:
-                    eci_client = NetStation(IP_ns, port_ns)
-                    eci_client.connect(ntp_ip=IP_amp)
-                    eci_client.begin_rec()  # begin to record
-                except:
-                    raise EgiNotFoundException
+                send_trigger(triggerbox, "BEGN")
 
             # reset the time to the beginning of the rest
             routineTimer.reset()
@@ -1037,7 +1055,7 @@ def main_experiment_without_eyetracker(isFirstSession=True):
                     event_type = 'CH0' + str(thisTrialsPlay.Chinese_text)
                 else:
                     event_type = 'CH' + str(thisTrialsPlay.Chinese_text)
-                eci_client.send_event(event_type=event_type)
+                send_trigger(triggerbox, event_type)
             for i in range(len(texts)):
                 texts[i].setAutoDraw(True)
             routineTimer.reset()
@@ -1065,7 +1083,7 @@ def main_experiment_without_eyetracker(isFirstSession=True):
         # mark the eeg with 'ROWS' when a row begins to be highlighted
         if args.add_mark == True:
             if count == 1:
-                eci_client.send_event(event_type='ROWS')
+                send_trigger(triggerbox, "ROWS")
 
         # --- Run Routine "trial" ---
         while continueRoutine and routineTimer.getTime() < args.shift_time:
@@ -1123,9 +1141,9 @@ def main_experiment_without_eyetracker(isFirstSession=True):
         if args.add_mark == True:
             main_row_words_len_without_punc, _ = calculate_length_without_punctuation_and_indexes(main_row_words)
             if count == main_row_words_len_without_punc:
-                # eci_client.send_event(event_type='SENTENCE_END')
+                # send_trigger(triggerbox, "SENTENCE_END")
 
-                eci_client.send_event(event_type='ROWE')
+                send_trigger(triggerbox, "ROWE")
 
                 count = 1
             else:
@@ -1240,9 +1258,7 @@ def main_experiment_without_eyetracker(isFirstSession=True):
 
     # stop recording eeg and disconnect the egi device
     if args.add_mark == True:
-        eci_client.send_event(event_type='STOP')
-        eci_client.end_rec()
-        eci_client.disconnect()
+        send_trigger(triggerbox, "STOP")
 
     # --- End experiment ---
     # Flip one final time so any remaining win.callOnFlip()
@@ -1269,38 +1285,37 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
         before the formal experiment begins
     """
     global args
-    # --- Connect to the egi device ---
+    # --- Connect to the trigger box ---
     if args.add_mark == True:
-        IP_ns = args.host_IP  # IP Address of Net Station
-        IP_amp = args.egi_IP  # IP Address of Amplifier
-        port_ns = 55513  # Port configured for ECI in Net Station
         try:
-            eci_client = NetStation(IP_ns, port_ns)
-            eci_client.connect(ntp_ip=IP_amp)
-            eci_client.begin_rec()  # begin to record
-            eci_client.send_event(event_type="BEGN")
+            triggerbox = TriggerBox(args.triggerbox_port)
+            send_trigger(triggerbox, "BEGN")
         except:
-            raise EgiNotFoundException
-
+            print("Failed to connect to TriggerBox")
+            triggerbox = None
         count = 1
+    else:
+        triggerbox = None
 
 
     try:
         g3 = await connect_to_glasses.with_hostname(args.eyetracker_hostname, using_zeroconf=True)
     except:
-        raise EyetrackerNotFoundException
+        print("Failed to connect to eyetracker")
+        g3 = None
 
-    async with g3.recordings.keep_updated_in_context():
+    if g3 is not None:
+        async with g3.recordings.keep_updated_in_context():
 
-        # Logging.info(
-        #     f"Recordings before: {list(map(lambda r: r.uuid, g3.recordings.children))}"
-        # )
+            # Logging.info(
+            #     f"Recordings before: {list(map(lambda r: r.uuid, g3.recordings.children))}"
+            # )
 
-        if args.add_eyetracker == True:
-            await g3.recorder.start()
-            print('eyetracker start to record!!!!!!!!!')
-            if args.add_mark == True:
-                eci_client.send_event(event_type='EYES')
+            if args.add_eyetracker == True:
+                await g3.recorder.start()
+                print('eyetracker start to record!!!!!!!!!')
+                if args.add_mark == True:
+                    send_trigger(triggerbox, "EYES")
 
         # --- Prepare for the psychopy experiment ---
         # Ensure that relative paths start from the same directory as this script
@@ -1396,16 +1411,16 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
 
         # --- Run Calibration ---
         if args.add_mark == True:
-            await calibrate(win, routineTimer, g3, eci_client=eci_client)
+            await calibrate(win, routineTimer, g3, triggerbox=triggerbox)
         else:
-            await calibrate(win, routineTimer, g3, eci_client=None)
+            await calibrate(win, routineTimer, g3, triggerbox=None)
 
         # --- Play Preface ---
         if isFirstSession == True:
             if args.add_mark == True:
-                play_preface(thisExp, expInfo, win, routineTimer, eci_client=eci_client)
+                play_preface(thisExp, expInfo, win, routineTimer, triggerbox=triggerbox)
             else:
-                play_preface(thisExp, expInfo, win, routineTimer, eci_client=None)
+                play_preface(thisExp, expInfo, win, routineTimer, triggerbox=None)
 
         # --- Prepare to start Routine "WelcomePage" ---
         continueRoutine = True
@@ -1674,11 +1689,11 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
             # rest if restRoutine is True
             if restRoutine == True:
                 if args.add_mark == True:
-                    eci_client = await rest_with_eyetracker(g3, routineTimer, win, thisTrialsPlay, texts,
-                                                            eci_client=eci_client)
+                    triggerbox = await rest_with_eyetracker(g3, routineTimer, win, thisTrialsPlay, texts,
+                                                            triggerbox=triggerbox)
                 else:
                     await rest_with_eyetracker(g3, routineTimer, win, thisTrialsPlay, texts,
-                                               eci_client=None)
+                                               triggerbox=None)
 
             if isChapterStart == True:
                 if args.add_mark == True:
@@ -1687,7 +1702,7 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
                     else:
                         event_type = 'CH' + str(thisTrialsPlay.Chinese_text)
 
-                    eci_client.send_event(event_type=event_type)
+                    send_trigger(triggerbox, event_type)
 
                 for i in range(len(texts)):
                     texts[i].setAutoDraw(True)
@@ -1702,8 +1717,8 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
             # mark the eeg with 'ROWS' when a row begins to be highlighted
             if args.add_mark == True:
                 if count == 1:
-                    # eci_client.send_event(event_type='STRT')
-                    eci_client.send_event(event_type='ROWS')
+                    # send_trigger(triggerbox, "STRT")
+                    send_trigger(triggerbox, "ROWS")
 
             # --- Run Routine "trial" ---
             routineTimer.reset()
@@ -1721,9 +1736,9 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
                 main_row_words_len_without_punc, _ = calculate_length_without_punctuation_and_indexes(
                     main_row_words)
                 if count == main_row_words_len_without_punc:
-                    # eci_client.send_event(event_type='SENTENCE_END')
+                    # send_trigger(triggerbox, "SENTENCE_END")
 
-                    eci_client.send_event(event_type='ROWE')
+                    send_trigger(triggerbox, "ROWE")
 
                     count = 1
                 else:
@@ -1741,7 +1756,7 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
             creation_time = await g3.recordings[0].get_created()
             Logging.info(f"Creation time of last recording in UTC: {creation_time}")
             if args.add_mark == True:
-                eci_client.send_event(event_type='EYEE')
+                send_trigger(triggerbox, "EYEE")
 
         # --- Prepare to start Routine "GoodbyePage" ---
         continueRoutine = True
@@ -1843,9 +1858,7 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
 
         # stop recording eeg and disconnect the egi device
         if args.add_mark == True:
-            eci_client.send_event(event_type='STOP')
-            eci_client.end_rec()
-            eci_client.disconnect()
+            send_trigger(triggerbox, "STOP")
 
         # --- End experiment ---
         # Flip one final time so any remaining win.callOnFlip()
@@ -1860,6 +1873,10 @@ async def main_experiment_with_eyetracker(isFirstSession=True):
         thisExp.abort()  # or data files will save again on exit
         win.close()
         core.quit()
+    else:
+        print("Eyetracker connection failed, running without eyetracker")
+        # Fall back to running without eyetracker
+        main_experiment_without_eyetracker(isFirstSession)
 
 
 if __name__ == '__main__':
@@ -1900,6 +1917,9 @@ if __name__ == '__main__':
                         help='Whether this is the first session of the experiment, this will determine whether to '
                              'display the preface before the formal experiment'
                              )
+    parser.add_argument('--triggerbox_port', type=str, default='COM4',
+                        help='COM port for the TriggerBox device'
+                        )
 
     args = parser.parse_args()
 
