@@ -126,6 +126,18 @@ ROWS: Beginning of a row
 ROWE: End of a row
 PRES：Beginning of the preface
 PREE：End of the preface
+
+BEGN → 1
+STOP → 2
+EYEE → 3
+EYES → 4
+CALS → 5
+CALE → 6
+PRES → 7
+PREE → 8
+ROWS → 9
+ROWE → 10
+CH01-CH40 → 11-50
 ```
 
 #### Calibration Coordinate Transformation
